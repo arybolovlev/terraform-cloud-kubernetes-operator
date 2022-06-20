@@ -44,8 +44,8 @@ type WorkspaceSpec struct {
 
 // WorkspaceStatus defines the observed state of Workspace
 type WorkspaceStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// Workspace ID that is managed by the controller
+	WorkspaceID string `json:"workspaceID"`
 }
 
 //+kubebuilder:object:root=true

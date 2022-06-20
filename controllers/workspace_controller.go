@@ -106,7 +106,19 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.doNotRequeue()
 	}
 
-	return ctrl.Result{}, nil
+	if needToAddFinalizer(instance) {
+		err := r.addFinalizer(ctx, instance)
+		if err != nil {
+			r.log.Error(err, "add finalizer")
+			return r.requeueOnErr(err)
+		}
+	}
+
+	// WORKSPACE RECONCILE LOGIC STARTS HERE
+
+	// UPDATE OBJECT STATUS LOGIC STARTS HERE
+
+	return r.doNotRequeue()
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -159,11 +171,27 @@ func isDeletionCandidate(instance *appv1alpha2.Workspace) bool {
 	return !instance.ObjectMeta.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(instance, workspaceFinalizer)
 }
 
+func needToAddFinalizer(instance *appv1alpha2.Workspace) bool {
+	return instance.ObjectMeta.DeletionTimestamp.IsZero() && !controllerutil.ContainsFinalizer(instance, workspaceFinalizer)
+}
+
 func (r *WorkspaceReconciler) removeWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) error {
-	return nil
+	if instance.Status.WorkspaceID == "" {
+		return nil
+	}
+	err := r.tfClient.Client.Workspaces.DeleteByID(ctx, instance.Status.WorkspaceID)
+	if errors.IsNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 func (r *WorkspaceReconciler) removeFinalizer(ctx context.Context, instance *appv1alpha2.Workspace) error {
 	controllerutil.RemoveFinalizer(instance, workspaceFinalizer)
+	return r.Update(ctx, instance)
+}
+
+func (r *WorkspaceReconciler) addFinalizer(ctx context.Context, instance *appv1alpha2.Workspace) error {
+	controllerutil.AddFinalizer(instance, workspaceFinalizer)
 	return r.Update(ctx, instance)
 }
