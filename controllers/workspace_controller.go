@@ -28,6 +28,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	appv1alpha2 "github.com/arybolovlev/terraform-cloud-kubernetes-operator/api/v1alpha2"
+	"github.com/go-logr/logr"
+
+	tfc "github.com/hashicorp/go-tfe"
 )
 
 const (
@@ -35,10 +38,16 @@ const (
 	workspaceFinalizer = "workspace.app.terraform.io/finalizer"
 )
 
+type TerraformCloudClient struct {
+	Client *tfc.Client
+}
+
 // WorkspaceReconciler reconciles a Workspace object
 type WorkspaceReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	log      logr.Logger
+	Scheme   *runtime.Scheme
+	tfClient TerraformCloudClient
 }
 
 //+kubebuilder:rbac:groups=app.terraform.io,resources=workspaces,verbs=get;list;watch;create;update;patch;delete
@@ -51,9 +60,12 @@ type WorkspaceReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.12.1/pkg/reconcile
 func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	r.log = log.FromContext(ctx)
+
+	r.log.Info("Reconcile Workspace", "action", "new reconciliation event")
 
 	instance := &appv1alpha2.Workspace{}
+
 	err := r.Client.Get(ctx, req.NamespacedName, instance)
 	if err != nil {
 		// 'Not found' error occurs when an object is removed from the Kubernetes
