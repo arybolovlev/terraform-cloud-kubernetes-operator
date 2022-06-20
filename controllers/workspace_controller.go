@@ -37,7 +37,7 @@ import (
 )
 
 const (
-	requeueInterval    = 60 * time.Second
+	requeueInterval    = 30 * time.Second
 	workspaceFinalizer = "workspace.app.terraform.io/finalizer"
 )
 
@@ -79,6 +79,14 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.requeueAfter(requeueInterval)
 	}
 
+	if needToAddFinalizer(instance) {
+		err := r.addFinalizer(ctx, instance)
+		if err != nil {
+			r.log.Error(err, "add finalizer")
+			return r.requeueOnErr(err)
+		}
+	}
+
 	token, err := r.getToken(ctx, instance)
 	if err != nil {
 		r.log.Error(err, "get token")
@@ -106,17 +114,16 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.doNotRequeue()
 	}
 
-	if needToAddFinalizer(instance) {
-		err := r.addFinalizer(ctx, instance)
-		if err != nil {
-			r.log.Error(err, "add finalizer")
-			return r.requeueOnErr(err)
-		}
+	// WORKSPACE RECONCILE LOGIC STARTS HERE
+	workspace, err := r.reconcileWorkspace(ctx, instance)
+	if err != nil {
+		r.log.Error(err, "cannot reconcile workspace")
+		return r.requeueAfter(requeueInterval)
 	}
 
-	// WORKSPACE RECONCILE LOGIC STARTS HERE
-
 	// UPDATE OBJECT STATUS LOGIC STARTS HERE
+	status := instance.Status
+	status.WorkspaceID = workspace.ID
 
 	return r.doNotRequeue()
 }
@@ -180,7 +187,7 @@ func (r *WorkspaceReconciler) removeWorkspace(ctx context.Context, instance *app
 		return nil
 	}
 	err := r.tfClient.Client.Workspaces.DeleteByID(ctx, instance.Status.WorkspaceID)
-	if errors.IsNotFound(err) {
+	if err == tfc.ErrResourceNotFound {
 		return nil
 	}
 	return err
@@ -194,4 +201,11 @@ func (r *WorkspaceReconciler) removeFinalizer(ctx context.Context, instance *app
 func (r *WorkspaceReconciler) addFinalizer(ctx context.Context, instance *appv1alpha2.Workspace) error {
 	controllerutil.AddFinalizer(instance, workspaceFinalizer)
 	return r.Update(ctx, instance)
+}
+
+func (r *WorkspaceReconciler) reconcileWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) (*tfc.Workspace, error) {
+	var workspace *tfc.Workspace
+	var err error
+
+	return workspace, err
 }
