@@ -7,4 +7,14 @@ plugins:
   scorecard.sdk.operatorframework.io/v2: {}
 projectName: terraform-cloud-kubernetes-operator
 repo: github.com/arybolovlev/terraform-cloud-kubernetes-operator
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: terraform.io
+  group: app
+  kind: Workspace
+  path: github.com/arybolovlev/terraform-cloud-kubernetes-operator/api/v1alpha2
+  version: v1alpha2
 version: "3"
