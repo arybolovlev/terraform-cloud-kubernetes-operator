@@ -211,15 +211,26 @@ func (t *TerraformCloudClient) createWorkspace(ctx context.Context, instance *ap
 	return t.Client.Workspaces.Create(ctx, spec.Organization, options)
 }
 
-func (t *TerraformCloudClient) getWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) (*tfc.Workspace, error) {
+func (t *TerraformCloudClient) readWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) (*tfc.Workspace, error) {
 	return t.Client.Workspaces.ReadByID(ctx, instance.Status.WorkspaceID)
+}
+
+func (t *TerraformCloudClient) updateWorkspace(ctx context.Context, instance *appv1alpha2.Workspace, workspace *tfc.Workspace) (*tfc.Workspace, error) {
+	var updateOptions tfc.WorkspaceUpdateOptions
+	spec := instance.Spec
+
+	if workspace.Name != spec.Name {
+		updateOptions.Name = &spec.Name
+	}
+
+	return t.Client.Workspaces.UpdateByID(ctx, instance.Status.WorkspaceID, updateOptions)
 }
 
 func (r *WorkspaceReconciler) reconcileWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) (*tfc.Workspace, error) {
 	var workspace *tfc.Workspace
 	var err error
 
-	// create a new workspace if workspace ID is unknown
+	// create a new workspace if workspace ID is unknown(means was never creared by the controller)
 	if instance.Status.WorkspaceID == "" {
 		r.log.Info("Reconcile Workspace", "msg", "workspace ID is empty, creating a new workspace")
 		workspace, err = r.tfClient.createWorkspace(ctx, instance)
@@ -230,8 +241,8 @@ func (r *WorkspaceReconciler) reconcileWorkspace(ctx context.Context, instance *
 		r.Status().Update(ctx, instance)
 	}
 
-	// verify whether the workspace exists
-	workspace, err = r.tfClient.getWorkspace(ctx, instance)
+	// verify whether the workspace exists and create if it doesn't(means it was removed from the TF Cloud bypass the operator)
+	workspace, err = r.tfClient.readWorkspace(ctx, instance)
 	if err != nil {
 		if err == tfc.ErrResourceNotFound {
 			r.log.Info("Reconcile Workspace", "msg", "workspace is not found, creating a new workspace")
@@ -243,6 +254,12 @@ func (r *WorkspaceReconciler) reconcileWorkspace(ctx context.Context, instance *
 			r.Status().Update(ctx, instance)
 		}
 	}
+	if err != nil {
+		return workspace, err
+	}
+
+	// update workspace if any changes have been made in the object spec
+	workspace, err = r.tfClient.updateWorkspace(ctx, instance, workspace)
 	if err != nil {
 		return workspace, err
 	}
