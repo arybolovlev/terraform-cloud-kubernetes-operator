@@ -20,16 +20,26 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// SecretKeySelector refers to an value in a Kubernetes Secret object
+type SecretKeySelector struct {
+	Name string `json:"name"`
+	Key  string `json:"key"`
+}
+
+// SecretKeyRef refers to a Kubernetes Secret object
+type SecretKeyRef struct {
+	SecretKeyRef *SecretKeySelector `json:"secretKeyRef"`
+}
 
 // WorkspaceSpec defines the desired state of Workspace
 type WorkspaceSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// Foo is an example field of Workspace. Edit workspace_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	// Organization name where the workspace will be created
+	Organization string `json:"organization"`
+	// API Token to be used for API calls
+	Token SecretKeyRef `json:"token"`
 }
 
 // WorkspaceStatus defines the observed state of Workspace
