@@ -203,9 +203,49 @@ func (r *WorkspaceReconciler) addFinalizer(ctx context.Context, instance *appv1a
 	return r.Update(ctx, instance)
 }
 
+func (t *TerraformCloudClient) createWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) (*tfc.Workspace, error) {
+	spec := instance.Spec
+	options := tfc.WorkspaceCreateOptions{
+		Name: tfc.String(spec.Name),
+	}
+	return t.Client.Workspaces.Create(ctx, spec.Organization, options)
+}
+
+func (t *TerraformCloudClient) getWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) (*tfc.Workspace, error) {
+	return t.Client.Workspaces.ReadByID(ctx, instance.Status.WorkspaceID)
+}
+
 func (r *WorkspaceReconciler) reconcileWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) (*tfc.Workspace, error) {
 	var workspace *tfc.Workspace
 	var err error
+
+	// create a new workspace if workspace ID is unknown
+	if instance.Status.WorkspaceID == "" {
+		r.log.Info("Reconcile Workspace", "msg", "workspace ID is empty, creating a new workspace")
+		workspace, err = r.tfClient.createWorkspace(ctx, instance)
+		if err != nil {
+			return workspace, err
+		}
+		instance.Status.WorkspaceID = workspace.ID
+		r.Status().Update(ctx, instance)
+	}
+
+	// verify whether the workspace exists
+	workspace, err = r.tfClient.getWorkspace(ctx, instance)
+	if err != nil {
+		if err == tfc.ErrResourceNotFound {
+			r.log.Info("Reconcile Workspace", "msg", "workspace is not found, creating a new workspace")
+			workspace, err = r.tfClient.createWorkspace(ctx, instance)
+			if err != nil {
+				return workspace, err
+			}
+			instance.Status.WorkspaceID = workspace.ID
+			r.Status().Update(ctx, instance)
+		}
+	}
+	if err != nil {
+		return workspace, err
+	}
 
 	return workspace, err
 }
