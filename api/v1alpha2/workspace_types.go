@@ -40,6 +40,8 @@ type WorkspaceSpec struct {
 	Organization string `json:"organization"`
 	// API Token to be used for API calls
 	Token SecretKeyRef `json:"token"`
+	// Workspace name
+	Name string `json:"name"`
 }
 
 // WorkspaceStatus defines the observed state of Workspace

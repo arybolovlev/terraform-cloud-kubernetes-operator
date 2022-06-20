@@ -35,6 +35,9 @@ spec:
           spec:
             description: WorkspaceSpec defines the desired state of Workspace
             properties:
+              name:
+                description: Workspace name
+                type: string
               organization:
                 description: Organization name where the workspace will be created
                 type: string
@@ -57,6 +60,7 @@ spec:
                 - secretKeyRef
                 type: object
             required:
+            - name
             - organization
             - token
             type: object
