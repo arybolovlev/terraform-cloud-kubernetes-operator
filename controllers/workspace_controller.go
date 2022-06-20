@@ -79,6 +79,11 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.requeueAfter(requeueInterval)
 	}
 
+	err = r.getClient(ctx, instance)
+	if err != nil {
+		return r.requeueAfter(requeueInterval)
+	}
+
 	if needToAddFinalizer(instance) {
 		err := r.addFinalizer(ctx, instance)
 		if err != nil {
@@ -87,34 +92,14 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 	}
 
-	token, err := r.getToken(ctx, instance)
-	if err != nil {
-		r.log.Error(err, "get token")
-		return r.requeueAfter(requeueInterval)
-	}
-
-	err = r.getClient(token)
-	if err != nil {
-		return r.requeueAfter(requeueInterval)
-	}
-
 	if isDeletionCandidate(instance) {
-		err = r.removeWorkspace(ctx, instance)
+		err = r.deleteWorkspace(ctx, instance)
 		if err != nil {
-			r.log.Error(err, "remove workspace")
 			return r.requeueOnErr(err)
 		}
-
-		err = r.removeFinalizer(ctx, instance)
-		if err != nil {
-			r.log.Error(err, "remove finalizer")
-			return r.requeueOnErr(err)
-		}
-
 		return r.doNotRequeue()
 	}
 
-	// WORKSPACE RECONCILE LOGIC STARTS HERE
 	workspace, err := r.reconcileWorkspace(ctx, instance)
 	if err != nil {
 		r.log.Error(err, "cannot reconcile workspace")
@@ -135,6 +120,7 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+// RETURNS
 func (r *WorkspaceReconciler) doNotRequeue() (reconcile.Result, error) {
 	return reconcile.Result{}, nil
 }
@@ -147,6 +133,7 @@ func (r *WorkspaceReconciler) requeueOnErr(err error) (reconcile.Result, error) 
 	return reconcile.Result{}, err
 }
 
+// TERRAFORM CLOUD PLATFORM CLIENT
 func (r *WorkspaceReconciler) getSecret(ctx context.Context, instance *appv1alpha2.Workspace) (*corev1.Secret, error) {
 	secret := &corev1.Secret{}
 	err := r.Client.Get(ctx, types.NamespacedName{Namespace: instance.Namespace, Name: instance.Spec.Token.SecretKeyRef.Name}, secret)
@@ -164,16 +151,20 @@ func (r *WorkspaceReconciler) getToken(ctx context.Context, instance *appv1alpha
 	return string(secret.Data[instance.Spec.Token.SecretKeyRef.Key]), nil
 }
 
-func (r *WorkspaceReconciler) getClient(token string) error {
+func (r *WorkspaceReconciler) getClient(ctx context.Context, instance *appv1alpha2.Workspace) error {
+	token, err := r.getToken(ctx, instance)
+	if err != nil {
+		return err
+	}
+
 	config := &tfc.Config{
 		Token: token,
 	}
-	var err error
-
 	r.tfClient.Client, err = tfc.NewClient(config)
 	return err
 }
 
+// HELPERS
 func isDeletionCandidate(instance *appv1alpha2.Workspace) bool {
 	return !instance.ObjectMeta.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(instance, workspaceFinalizer)
 }
@@ -182,15 +173,10 @@ func needToAddFinalizer(instance *appv1alpha2.Workspace) bool {
 	return instance.ObjectMeta.DeletionTimestamp.IsZero() && !controllerutil.ContainsFinalizer(instance, workspaceFinalizer)
 }
 
-func (r *WorkspaceReconciler) removeWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) error {
-	if instance.Status.WorkspaceID == "" {
-		return nil
-	}
-	err := r.tfClient.Client.Workspaces.DeleteByID(ctx, instance.Status.WorkspaceID)
-	if err == tfc.ErrResourceNotFound {
-		return nil
-	}
-	return err
+// FINALIZERS
+func (r *WorkspaceReconciler) addFinalizer(ctx context.Context, instance *appv1alpha2.Workspace) error {
+	controllerutil.AddFinalizer(instance, workspaceFinalizer)
+	return r.Update(ctx, instance)
 }
 
 func (r *WorkspaceReconciler) removeFinalizer(ctx context.Context, instance *appv1alpha2.Workspace) error {
@@ -198,24 +184,20 @@ func (r *WorkspaceReconciler) removeFinalizer(ctx context.Context, instance *app
 	return r.Update(ctx, instance)
 }
 
-func (r *WorkspaceReconciler) addFinalizer(ctx context.Context, instance *appv1alpha2.Workspace) error {
-	controllerutil.AddFinalizer(instance, workspaceFinalizer)
-	return r.Update(ctx, instance)
-}
-
-func (t *TerraformCloudClient) createWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) (*tfc.Workspace, error) {
+// WORKSPACES
+func (r *WorkspaceReconciler) createWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) (*tfc.Workspace, error) {
 	spec := instance.Spec
 	options := tfc.WorkspaceCreateOptions{
 		Name: tfc.String(spec.Name),
 	}
-	return t.Client.Workspaces.Create(ctx, spec.Organization, options)
+	return r.tfClient.Client.Workspaces.Create(ctx, spec.Organization, options)
 }
 
-func (t *TerraformCloudClient) readWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) (*tfc.Workspace, error) {
-	return t.Client.Workspaces.ReadByID(ctx, instance.Status.WorkspaceID)
+func (r *WorkspaceReconciler) readWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) (*tfc.Workspace, error) {
+	return r.tfClient.Client.Workspaces.ReadByID(ctx, instance.Status.WorkspaceID)
 }
 
-func (t *TerraformCloudClient) updateWorkspace(ctx context.Context, instance *appv1alpha2.Workspace, workspace *tfc.Workspace) (*tfc.Workspace, error) {
+func (r *WorkspaceReconciler) updateWorkspace(ctx context.Context, instance *appv1alpha2.Workspace, workspace *tfc.Workspace) (*tfc.Workspace, error) {
 	var updateOptions tfc.WorkspaceUpdateOptions
 	spec := instance.Spec
 
@@ -223,7 +205,21 @@ func (t *TerraformCloudClient) updateWorkspace(ctx context.Context, instance *ap
 		updateOptions.Name = &spec.Name
 	}
 
-	return t.Client.Workspaces.UpdateByID(ctx, instance.Status.WorkspaceID, updateOptions)
+	return r.tfClient.Client.Workspaces.UpdateByID(ctx, instance.Status.WorkspaceID, updateOptions)
+}
+
+func (r *WorkspaceReconciler) deleteWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) error {
+	if instance.Status.WorkspaceID == "" {
+		return nil
+	}
+	err := r.tfClient.Client.Workspaces.DeleteByID(ctx, instance.Status.WorkspaceID)
+	if err != nil {
+		if err == tfc.ErrResourceNotFound {
+			err = r.removeFinalizer(ctx, instance)
+		}
+		return err
+	}
+	return r.removeFinalizer(ctx, instance)
 }
 
 func (r *WorkspaceReconciler) reconcileWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) (*tfc.Workspace, error) {
@@ -233,7 +229,7 @@ func (r *WorkspaceReconciler) reconcileWorkspace(ctx context.Context, instance *
 	// create a new workspace if workspace ID is unknown(means was never creared by the controller)
 	if instance.Status.WorkspaceID == "" {
 		r.log.Info("Reconcile Workspace", "msg", "workspace ID is empty, creating a new workspace")
-		workspace, err = r.tfClient.createWorkspace(ctx, instance)
+		workspace, err = r.createWorkspace(ctx, instance)
 		if err != nil {
 			return workspace, err
 		}
@@ -242,11 +238,11 @@ func (r *WorkspaceReconciler) reconcileWorkspace(ctx context.Context, instance *
 	}
 
 	// verify whether the workspace exists and create if it doesn't(means it was removed from the TF Cloud bypass the operator)
-	workspace, err = r.tfClient.readWorkspace(ctx, instance)
+	workspace, err = r.readWorkspace(ctx, instance)
 	if err != nil {
 		if err == tfc.ErrResourceNotFound {
 			r.log.Info("Reconcile Workspace", "msg", "workspace is not found, creating a new workspace")
-			workspace, err = r.tfClient.createWorkspace(ctx, instance)
+			workspace, err = r.createWorkspace(ctx, instance)
 			if err != nil {
 				return workspace, err
 			}
@@ -259,7 +255,7 @@ func (r *WorkspaceReconciler) reconcileWorkspace(ctx context.Context, instance *
 	}
 
 	// update workspace if any changes have been made in the object spec
-	workspace, err = r.tfClient.updateWorkspace(ctx, instance, workspace)
+	workspace, err = r.updateWorkspace(ctx, instance, workspace)
 	if err != nil {
 		return workspace, err
 	}
