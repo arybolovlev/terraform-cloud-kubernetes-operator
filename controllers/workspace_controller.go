@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -33,6 +34,7 @@ type TerraformCloudClient struct {
 type WorkspaceReconciler struct {
 	client.Client
 	log      logr.Logger
+	Recorder record.EventRecorder
 	Scheme   *runtime.Scheme
 	tfClient TerraformCloudClient
 }
@@ -56,15 +58,10 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	err := r.Client.Get(ctx, req.NamespacedName, instance)
 	if err != nil {
 		// 'Not found' error occurs when an object is removed from the Kubernetes
-		// No actions are required at this state
+		// No actions are required in this case
 		if errors.IsNotFound(err) {
 			return r.doNotRequeue()
 		}
-		return r.requeueAfter(requeueInterval)
-	}
-
-	err = r.getClient(ctx, instance)
-	if err != nil {
 		return r.requeueAfter(requeueInterval)
 	}
 
@@ -72,27 +69,20 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		err := r.addFinalizer(ctx, instance)
 		if err != nil {
 			r.log.Error(err, "add finalizer")
-			return r.requeueOnErr(err)
+			return r.requeueOnErr(err) // ???
 		}
 	}
 
-	if isDeletionCandidate(instance) {
-		err = r.deleteWorkspace(ctx, instance)
-		if err != nil {
-			return r.requeueOnErr(err)
-		}
-		return r.doNotRequeue()
-	}
-
-	workspace, err := r.reconcileWorkspace(ctx, instance)
+	err = r.getClient(ctx, instance)
 	if err != nil {
-		r.log.Error(err, "cannot reconcile workspace")
 		return r.requeueAfter(requeueInterval)
 	}
 
-	// UPDATE OBJECT STATUS LOGIC STARTS HERE
-	status := instance.Status
-	status.WorkspaceID = workspace.ID
+	err = r.reconcileWorkspace(ctx, instance)
+	if err != nil {
+		r.log.Error(err, "Reconcile workspace")
+		return r.requeueAfter(requeueInterval)
+	}
 
 	return r.doNotRequeue()
 }
@@ -168,6 +158,12 @@ func (r *WorkspaceReconciler) removeFinalizer(ctx context.Context, instance *app
 	return r.Update(ctx, instance)
 }
 
+// STATUS
+func (r *WorkspaceReconciler) updateStatus(ctx context.Context, instance *appv1alpha2.Workspace, workspace *tfc.Workspace) error {
+	instance.Status.WorkspaceID = workspace.ID
+	return r.Status().Update(ctx, instance)
+}
+
 // WORKSPACES
 func (r *WorkspaceReconciler) createWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) (*tfc.Workspace, error) {
 	spec := instance.Spec
@@ -193,56 +189,66 @@ func (r *WorkspaceReconciler) updateWorkspace(ctx context.Context, instance *app
 }
 
 func (r *WorkspaceReconciler) deleteWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) error {
+	// if the Kubernetes object doesn't have workspace ID, it means it a workspace was never created
+	// in this case, remove the finalizer and let Kubernetes remove the object permanently
 	if instance.Status.WorkspaceID == "" {
-		return nil
+		return r.removeFinalizer(ctx, instance)
 	}
 	err := r.tfClient.Client.Workspaces.DeleteByID(ctx, instance.Status.WorkspaceID)
 	if err != nil {
+		// if workspace wasn't found, it means it was deleted from the TF Cloud bypass the operator
+		// in this case, remove the finalizer and let Kubernetes remove the object permanently
 		if err == tfc.ErrResourceNotFound {
-			err = r.removeFinalizer(ctx, instance)
+			return r.removeFinalizer(ctx, instance)
 		}
 		return err
 	}
 	return r.removeFinalizer(ctx, instance)
 }
 
-func (r *WorkspaceReconciler) reconcileWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) (*tfc.Workspace, error) {
+func (r *WorkspaceReconciler) reconcileWorkspace(ctx context.Context, instance *appv1alpha2.Workspace) error {
 	var workspace *tfc.Workspace
 	var err error
 
-	// create a new workspace if workspace ID is unknown(means was never creared by the controller)
+	// verify whether the Kubernetes object has been marked as deleted and if so delete the workspace
+	if isDeletionCandidate(instance) {
+		return r.deleteWorkspace(ctx, instance)
+	}
+
+	// create a new workspace if workspace ID is unknown(means it was never created by the controller)
+	// this condition will work just one time, when a new Kubernetes object is created
 	if instance.Status.WorkspaceID == "" {
 		r.log.Info("Reconcile Workspace", "msg", "workspace ID is empty, creating a new workspace")
 		workspace, err = r.createWorkspace(ctx, instance)
 		if err != nil {
-			return workspace, err
+			return err
 		}
-		instance.Status.WorkspaceID = workspace.ID
-		r.Status().Update(ctx, instance)
+		// Update status with the workspace ID once a workspace has been successfully created
+		r.updateStatus(ctx, instance, workspace)
 	}
 
-	// verify whether the workspace exists and create if it doesn't(means it was removed from the TF Cloud bypass the operator)
+	// read the Terraform Cloud workspace to compare it with the Kubernetes object spec
 	workspace, err = r.readWorkspace(ctx, instance)
 	if err != nil {
+		// verify whether the workspace exists and create if it doesn't(means it was removed from the TF Cloud bypass the operator)
 		if err == tfc.ErrResourceNotFound {
 			r.log.Info("Reconcile Workspace", "msg", "workspace is not found, creating a new workspace")
 			workspace, err = r.createWorkspace(ctx, instance)
 			if err != nil {
-				return workspace, err
+				return err
 			}
-			instance.Status.WorkspaceID = workspace.ID
-			r.Status().Update(ctx, instance)
+			// Update status with the workspace ID once a workspace has been successfully created
+			r.updateStatus(ctx, instance, workspace)
+		} else {
+			return err
 		}
 	}
-	if err != nil {
-		return workspace, err
-	}
 
-	// update workspace if any changes have been made in the object spec
+	// update workspace if any changes have been made in the Kubernetes object spec
 	workspace, err = r.updateWorkspace(ctx, instance, workspace)
 	if err != nil {
-		return workspace, err
+		return err
 	}
 
-	return workspace, err
+	return r.updateStatus(ctx, instance, workspace)
 }
