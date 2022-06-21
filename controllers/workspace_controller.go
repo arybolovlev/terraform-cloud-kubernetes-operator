@@ -51,7 +51,7 @@ type WorkspaceReconciler struct {
 func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	r.log = log.FromContext(ctx)
 
-	r.log.Info("Reconcile Workspace", "action", "new reconciliation event")
+	r.log.Info("Reconcile Workspace", "msg", "new reconciliation event")
 
 	instance := &appv1alpha2.Workspace{}
 
@@ -160,7 +160,8 @@ func (r *WorkspaceReconciler) removeFinalizer(ctx context.Context, instance *app
 
 // STATUS
 func (r *WorkspaceReconciler) updateStatus(ctx context.Context, instance *appv1alpha2.Workspace, workspace *tfc.Workspace) error {
-	instance.Status.WorkspaceID = workspace.ID
+	status := instance.Status
+	status.WorkspaceID = workspace.ID
 	return r.Status().Update(ctx, instance)
 }
 
