@@ -137,8 +137,7 @@ func (r *WorkspaceReconciler) removeFinalizer(ctx context.Context, instance *app
 
 // STATUS
 func (r *WorkspaceReconciler) updateStatus(ctx context.Context, instance *appv1alpha2.Workspace, workspace *tfc.Workspace) error {
-	status := instance.Status
-	status.WorkspaceID = workspace.ID
+	instance.Status.WorkspaceID = workspace.ID
 	return r.Status().Update(ctx, instance)
 }
 
