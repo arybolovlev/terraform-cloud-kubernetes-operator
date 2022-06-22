@@ -13,7 +13,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	appv1alpha2 "github.com/arybolovlev/terraform-cloud-kubernetes-operator/api/v1alpha2"
 	"github.com/go-logr/logr"
@@ -94,19 +93,6 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// RETURNS
-func (r *WorkspaceReconciler) doNotRequeue() (reconcile.Result, error) {
-	return reconcile.Result{}, nil
-}
-
-func (r *WorkspaceReconciler) requeueAfter(duration time.Duration) (reconcile.Result, error) {
-	return reconcile.Result{Requeue: true, RequeueAfter: duration}, nil
-}
-
-func (r *WorkspaceReconciler) requeueOnErr(err error) (reconcile.Result, error) {
-	return reconcile.Result{}, err
-}
-
 // TERRAFORM CLOUD PLATFORM CLIENT
 func (r *WorkspaceReconciler) getSecret(ctx context.Context, instance *appv1alpha2.Workspace) (*corev1.Secret, error) {
 	secret := &corev1.Secret{}
@@ -136,15 +122,6 @@ func (r *WorkspaceReconciler) getClient(ctx context.Context, instance *appv1alph
 	}
 	r.tfClient.Client, err = tfc.NewClient(config)
 	return err
-}
-
-// HELPERS
-func isDeletionCandidate(instance *appv1alpha2.Workspace) bool {
-	return !instance.ObjectMeta.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(instance, workspaceFinalizer)
-}
-
-func needToAddFinalizer(instance *appv1alpha2.Workspace) bool {
-	return instance.ObjectMeta.DeletionTimestamp.IsZero() && !controllerutil.ContainsFinalizer(instance, workspaceFinalizer)
 }
 
 // FINALIZERS
